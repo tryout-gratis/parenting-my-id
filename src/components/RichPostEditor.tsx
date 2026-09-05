@@ -4,12 +4,13 @@ import { applyAutoLinks, calculateReadTime, preprocessMarkdownLineBreaks } from 
 import { sanitizeAndOptimizeImageUrl, sanitizeMarkdownImageUrls } from '../lib/imageUtils';
 import { AutoLink, User, PostRevision, UserRole, PostStatus } from '../types';
 import SeoAuditWidget from './SeoAuditWidget';
+import { transformVideoEmbeds, parseVideoUrl } from '../lib/videoEmbed';
 import { 
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, 
   List, ListOrdered, CheckSquare, Quote, Code, Table, Minus, 
-  Link as LinkIcon, Link2, Image as ImageIcon, Upload, Eye, Edit3, Columns, 
+  Link as LinkIcon, Link2, Image as ImageIcon, Video, Upload, Eye, Edit3, Columns, 
   Undo, Redo, Sparkles, CheckCircle2, RefreshCw, X, Copy, Check, FileText,
-  Users, History, RotateCcw, Award, ShieldCheck, Send, AlertTriangle, AlertCircle, ThumbsUp, XCircle
+  Users, History, RotateCcw, Award, ShieldCheck, Send, AlertTriangle, AlertCircle, ThumbsUp, XCircle, Play
 } from 'lucide-react';
 
 interface RichPostEditorProps {
@@ -121,6 +122,11 @@ export default function RichPostEditor({
   const [lastUploadedUrl, setLastUploadedUrl] = useState<string>('');
   const [unsplashSearch, setUnsplashSearch] = useState('');
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  // Video insertion modal state
+  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [videoUrlInput, setVideoUrlInput] = useState('');
+  const [videoPlatformTab, setVideoPlatformTab] = useState<'all' | 'youtube' | 'tiktok' | 'instagram'>('all');
 
   const UNSPLASH_PRESETS = [
     { label: 'Edukasi & Keluarga', url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=800&q=65&fm=webp' },
@@ -286,11 +292,35 @@ export default function RichPostEditor({
     applyFormatting('', '', tableTemplate);
   };
 
-  // HTML Preview Renderer with Auto-Links & Lazy Loaded Images
+  // Insert Video Action (YouTube, TikTok, Instagram)
+  const handleInsertVideo = (customUrl?: string) => {
+    const urlToUse = (customUrl || videoUrlInput).trim();
+    if (!urlToUse) return;
+
+    const parsed = parseVideoUrl(urlToUse);
+    const formatted = parsed ? `\n\n${parsed.embedHtml}\n\n` : `\n\n${urlToUse}\n\n`;
+
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const fullText = textarea.value.substring(0, start) + formatted + textarea.value.substring(end);
+      updateMarkdownWithHistory(fullText);
+    } else {
+      updateMarkdownWithHistory(`${markdown}${formatted}`);
+    }
+
+    setShowVideoModal(false);
+    setVideoUrlInput('');
+  };
+
+  // HTML Preview Renderer with Auto-Links, Video Embeds & Lazy Loaded Images
   const parsedPreviewHtml = useMemo(() => {
     if (!markdown) return '';
     const preparedMd = preprocessMarkdownLineBreaks(markdown);
-    let rawHtml = marked.parse(preparedMd, { async: false, gfm: true, breaks: true }) as string;
+    const mdWithVideos = transformVideoEmbeds(preparedMd);
+    let rawHtml = marked.parse(mdWithVideos, { async: false, gfm: true, breaks: true }) as string;
+    rawHtml = transformVideoEmbeds(rawHtml);
 
     // Inject loading="lazy" and decoding="async" into <img> tags
     rawHtml = rawHtml.replace(/<img\s+/gi, '<img loading="lazy" decoding="async" ');
@@ -338,7 +368,7 @@ export default function RichPostEditor({
           <button
             type="button"
             onClick={() => setViewMode('write')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
               viewMode === 'write'
                 ? 'bg-rose-600 text-white shadow-xs'
                 : userRole === 'writer' ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700' : 'text-slate-300 hover:text-white hover:bg-slate-700'
@@ -352,7 +382,7 @@ export default function RichPostEditor({
           <button
             type="button"
             onClick={() => setViewMode('split')}
-            className={`hidden md:flex px-3 py-1.5 rounded-xl text-xs font-bold transition-all items-center gap-1.5 ${
+            className={`hidden md:flex px-3 py-1.5 rounded-xl text-xs font-bold transition-colors items-center gap-1.5 ${
               viewMode === 'split'
                 ? 'bg-rose-600 text-white shadow-xs'
                 : userRole === 'writer' ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700' : 'text-slate-300 hover:text-white hover:bg-slate-700'
@@ -365,7 +395,7 @@ export default function RichPostEditor({
           <button
             type="button"
             onClick={() => setViewMode('preview')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
               viewMode === 'preview'
                 ? 'bg-rose-600 text-white shadow-xs'
                 : userRole === 'writer' ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700' : 'text-slate-300 hover:text-white hover:bg-slate-700'
@@ -412,7 +442,7 @@ export default function RichPostEditor({
             <button
               type="button"
               onClick={() => onPublishSubmit('pending_approval')}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 shrink-0"
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               <span>Kirim untuk Ditinjau 🚀</span>
@@ -433,7 +463,7 @@ export default function RichPostEditor({
               <button
                 type="button"
                 onClick={() => onPublishSubmit('published')}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold hover:from-emerald-500 hover:to-teal-500 shadow-md transition-all flex items-center gap-1.5 shrink-0"
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold hover:from-emerald-500 hover:to-teal-500 shadow-md transition-colors flex items-center gap-1.5 shrink-0"
               >
                 <ThumbsUp className="w-3.5 h-3.5" />
                 <span>Setujui & Terbitkan ✅</span>
@@ -556,7 +586,7 @@ export default function RichPostEditor({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Contoh: Panduan Lengkap & Strategi Terbaru..."
-                className={`w-full px-4 py-3.5 rounded-2xl border text-lg font-extrabold transition-all placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+                className={`w-full px-4 py-3.5 rounded-2xl border text-lg font-extrabold transition-colors placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
                   userRole === 'writer'
                     ? 'bg-[#FAF9F6] dark:bg-slate-900 border-[#E2E0D8] dark:border-slate-800 text-[#2D3748] dark:text-white focus:ring-emerald-500/50'
                     : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:ring-rose-500'
@@ -654,6 +684,14 @@ export default function RichPostEditor({
                 title="Sisipkan Gambar"
               >
                 <ImageIcon className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowVideoModal(true)}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 font-bold shadow-xs active:bg-indigo-200 shrink-0"
+                title="Sisipkan Video (YouTube, TikTok, Instagram)"
+              >
+                <Video className="w-5 h-5" />
               </button>
               <button
                 type="button"
@@ -832,6 +870,16 @@ export default function RichPostEditor({
                     <ImageIcon className="w-3.5 h-3.5" />
                     <span>Gambar</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowVideoModal(true)}
+                    className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 font-bold text-xs hover:bg-indigo-100 transition-colors flex items-center gap-1"
+                    title="Sisipkan Video (YouTube, TikTok, Instagram)"
+                  >
+                    <Video className="w-3.5 h-3.5" />
+                    <span>Video</span>
+                  </button>
                 </div>
 
                 {/* HISTORY UNDO/REDO & CLEAR */}
@@ -993,7 +1041,7 @@ export default function RichPostEditor({
                 type="button"
                 onClick={onAiGenerateMeta}
                 disabled={isAiLoading || !title}
-                className="w-full py-2.5 rounded-xl bg-white text-rose-600 font-bold text-xs shadow-sm hover:bg-rose-50 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+                className="w-full py-2.5 rounded-xl bg-white text-rose-600 font-bold text-xs shadow-sm hover:bg-rose-50 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 {isAiLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-rose-600" />}
                 <span>Generate SEO Meta dengan AI</span>
@@ -1266,7 +1314,7 @@ export default function RichPostEditor({
                         <button
                           type="button"
                           onClick={() => onRestoreRevision(rev)}
-                          className="w-full py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-sm transition-all flex items-center justify-center gap-1.5"
+                          className="w-full py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-sm transition-colors flex items-center justify-center gap-1.5"
                         >
                           <RotateCcw className="w-3 h-3" />
                           <span>Kembalikan ke Versi Ini (Rollback)</span>
@@ -1306,7 +1354,7 @@ export default function RichPostEditor({
           <button
             type="button"
             onClick={() => onPublishSubmit('draft')}
-            className="px-4 py-2.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 text-xs font-bold transition-all flex items-center gap-2"
+            className="px-4 py-2.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 text-xs font-bold transition-colors flex items-center gap-2"
           >
             <FileText className="w-4 h-4 text-slate-500" />
             <span>Simpan Draf</span>
@@ -1317,7 +1365,7 @@ export default function RichPostEditor({
             <button
               type="button"
               onClick={() => onPublishSubmit('pending_approval')}
-              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-all flex items-center gap-2"
+              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-colors flex items-center gap-2"
             >
               <Send className="w-4 h-4" />
               <span>Kirim untuk Ditinjau 🚀</span>
@@ -1339,7 +1387,7 @@ export default function RichPostEditor({
               <button
                 type="button"
                 onClick={() => onPublishSubmit('published')}
-                className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-extrabold shadow-lg transition-all flex items-center gap-2"
+                className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-extrabold shadow-lg transition-colors flex items-center gap-2"
               >
                 <ThumbsUp className="w-4 h-4" />
                 <span>Setujui & Terbitkan ✅</span>
@@ -1442,7 +1490,7 @@ export default function RichPostEditor({
               <button
                 type="button"
                 onClick={() => setImageTab('upload')}
-                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                className={`flex-1 py-1.5 rounded-lg transition-colors ${
                   imageTab === 'upload' ? 'bg-white dark:bg-slate-900 text-rose-600 shadow-xs' : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
@@ -1451,7 +1499,7 @@ export default function RichPostEditor({
               <button
                 type="button"
                 onClick={() => setImageTab('unsplash')}
-                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                className={`flex-1 py-1.5 rounded-lg transition-colors ${
                   imageTab === 'unsplash' ? 'bg-white dark:bg-slate-900 text-rose-600 shadow-xs' : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
@@ -1460,7 +1508,7 @@ export default function RichPostEditor({
               <button
                 type="button"
                 onClick={() => setImageTab('url')}
-                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                className={`flex-1 py-1.5 rounded-lg transition-colors ${
                   imageTab === 'url' ? 'bg-white dark:bg-slate-900 text-rose-600 shadow-xs' : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
@@ -1630,7 +1678,7 @@ export default function RichPostEditor({
                         setImageUrl(preset.url);
                         setImageAlt(preset.label);
                       }}
-                      className={`group relative rounded-xl overflow-hidden border-2 cursor-pointer transition-all ${
+                      className={`group relative rounded-xl overflow-hidden border-2 cursor-pointer transition-colors ${
                         imageUrl === preset.url ? 'border-rose-500 ring-2 ring-rose-200' : 'border-transparent hover:border-slate-300'
                       }`}
                     >
@@ -1739,6 +1787,180 @@ export default function RichPostEditor({
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* MODAL INSERT VIDEO (YOUTUBE, TIKTOK, INSTAGRAM) */}
+      {/* ------------------------------------------------------------- */}
+      {showVideoModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400">
+                  <Video className="w-4 h-4" />
+                </div>
+                <span>Sisipkan Video Responsif</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVideoModal(false);
+                  setVideoUrlInput('');
+                }}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* PLATFORM PILLS */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Platform didukung:</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-bold text-[11px] border border-red-200/50 dark:border-red-900/50">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  YouTube & Shorts
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-[11px] border border-slate-200 dark:border-slate-700">
+                  TikTok Video
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-pink-50 dark:bg-pink-950/40 text-pink-700 dark:text-pink-300 font-bold text-[11px] border border-pink-200/50 dark:border-pink-900/50">
+                  Instagram Reel & Post
+                </span>
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleInsertVideo();
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Link / URL Video
+                </label>
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={videoUrlInput}
+                    onChange={(e) => setVideoUrlInput(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=... atau TikTok / Instagram link"
+                    className="w-full pl-3.5 pr-20 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs bg-slate-50 dark:bg-slate-800/60 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    autoFocus
+                  />
+                  {videoUrlInput && (
+                    <button
+                      type="button"
+                      onClick={() => setVideoUrlInput('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[11px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    >
+                      Hapus
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* LIVE DETECTION BADGE & PREVIEW */}
+              {videoUrlInput && (() => {
+                const parsed = parseVideoUrl(videoUrlInput);
+                if (!parsed) {
+                  return (
+                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>URL belum dikenali sebagai YouTube, TikTok, atau Instagram. Pastikan link berformat publik dan lengkap.</span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3 p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                          Video Terdeteksi: <span className="uppercase text-indigo-600 dark:text-indigo-400">{parsed.platform}</span>
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400">
+                        ID: {parsed.id}
+                      </span>
+                    </div>
+
+                    <div className="w-full max-h-[260px] overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-black flex items-center justify-center">
+                      {parsed.platform === 'youtube' && (
+                        <div className="w-full aspect-video">
+                          <iframe
+                            src={`https://www.youtube-nocookie.com/embed/${parsed.id}`}
+                            className="w-full h-full border-0"
+                            title="YouTube preview"
+                            loading="lazy"
+                          />
+                        </div>
+                      )}
+                      {parsed.platform === 'tiktok' && (
+                        <div className="w-full h-[240px] flex items-center justify-center bg-slate-900 text-white text-xs font-bold gap-2">
+                          <Play className="w-6 h-6 text-cyan-400" />
+                          <span>Pratinjau TikTok #{parsed.id} siap disisipkan responsif</span>
+                        </div>
+                      )}
+                      {parsed.platform === 'instagram' && (
+                        <div className="w-full h-[240px] flex items-center justify-center bg-slate-900 text-white text-xs font-bold gap-2">
+                          <Play className="w-6 h-6 text-pink-400" />
+                          <span>Pratinjau Instagram Reel #{parsed.id} siap disisipkan responsif</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* QUICK EXAMPLES WHEN EMPTY */}
+              {!videoUrlInput && (
+                <div className="space-y-2 pt-1">
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Contoh format yang didukung:</span>
+                  <div className="space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-red-600">YouTube:</span>
+                      <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[10px]">https://www.youtube.com/watch?v=dQw4w9WgXcQ</code>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-800 dark:text-slate-200">TikTok:</span>
+                      <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[10px]">https://www.tiktok.com/@user/video/7234567890</code>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-pink-600">Instagram:</span>
+                      <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[10px]">https://www.instagram.com/reel/C3_ab12c/</code>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVideoModal(false);
+                    setVideoUrlInput('');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={!videoUrlInput.trim()}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-1.5"
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span>Sisipkan Video ke Artikel</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Post, AutoLink, SiteConfig } from '../types';
 import { applyAutoLinks, preprocessMarkdownLineBreaks } from '../lib/autolink';
+import { transformVideoEmbeds } from '../lib/videoEmbed';
 import { marked } from 'marked';
 import { Clock, Eye, Calendar, ArrowLeft, Share2, Check, Bookmark, Sparkles, MessageCircle, Twitter, Facebook, Copy, Award, CheckCircle2, Linkedin, Instagram, Globe, Users, ShieldCheck } from 'lucide-react';
 import SEOHelper from '../components/SEOHelper';
@@ -83,75 +84,50 @@ export default function ArticleDetailView({
     }
   }, [post, isPostsLoading, isFetchingSingle, attemptedFetch, slug, onRefreshPosts]);
 
-  const [currentViews, setCurrentViews] = useState(post ? post.views : 0);
-  const [hasTrackedView, setHasTrackedView] = useState(false);
+  const [currentViews, setCurrentViews] = useState(post ? (post.views || 0) + 1 : 0);
+  const trackedPostIdRef = useRef<number | string | null>(null);
 
   useEffect(() => {
-    if (post) {
-      setCurrentViews(post.views);
-      setHasTrackedView(false);
-    }
-  }, [post?.id, post?.views]);
+    if (!post) return;
 
-  // Reader/Viewer Counter Tracking (Human reader scrolls past article midpoint)
-  useEffect(() => {
-    if (!post || hasTrackedView) return;
-
-    const sessionKey = `viewed_article_${post.id}`;
-    if (sessionStorage.getItem(sessionKey)) {
-      setHasTrackedView(true);
+    // Bot detection guard
+    const isBot = /bot|googlebot|crawler|spider|robot|crawling/i.test(navigator.userAgent);
+    if (isBot) {
+      setCurrentViews(post.views || 0);
       return;
     }
 
-    const handleScroll = () => {
-      // Bot detection guard
-      const isBot = /bot|googlebot|crawler|spider|robot|crawling/i.test(navigator.userAgent);
-      if (isBot) return;
+    const postIdentifier = post.id || post.slug;
+    if (trackedPostIdRef.current === postIdentifier) return;
+    trackedPostIdRef.current = postIdentifier;
 
-      const articleEl = document.getElementById('article-content-body');
-      if (!articleEl) return;
+    // Optimistically update views and sync with backend counter endpoint
+    const newOptimisticViews = (post.views || 0) + 1;
+    setCurrentViews(newOptimisticViews);
+    post.views = newOptimisticViews;
 
-      const rect = articleEl.getBoundingClientRect();
-      const elementTopRelativeToWindow = rect.top + window.scrollY;
-      const elementHeight = rect.height;
-      const midPoint = elementTopRelativeToWindow + (elementHeight * 0.45); // 45% midpoint of content
-
-      const currentScrollPosition = window.scrollY + window.innerHeight;
-
-      if (currentScrollPosition >= midPoint) {
-        sessionStorage.setItem(sessionKey, 'true');
-        setHasTrackedView(true);
-
-        fetch(`/api/posts/${post.id}/view`, { method: 'POST' })
-          .then((res) => res.json())
-          .then((data: any) => {
-            if (data && typeof data.views === 'number') {
-              setCurrentViews(data.views);
-              post.views = data.views;
-            } else {
-              setCurrentViews((prev) => prev + 1);
-              post.views += 1;
-            }
-          })
-          .catch(() => {
-            setCurrentViews((prev) => prev + 1);
-            post.views += 1;
-          });
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
-
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [post, hasTrackedView]);
+    const endpoint = post.id ? `/api/posts/${post.id}/view` : `/api/posts/${encodeURIComponent(post.slug)}/view`;
+    fetch(endpoint, { method: 'POST' })
+      .then((res) => res.json())
+      .then((data: any) => {
+        if (data && typeof data.views === 'number') {
+          setCurrentViews(data.views);
+          post.views = data.views;
+        }
+      })
+      .catch((err) => {
+        console.warn('View tracking network notice:', err);
+      });
+  }, [post?.id, post?.slug]);
 
   // Render markdown to HTML + extract TOC items + apply Auto-Links & Heading IDs
   const { parsedHtml, tocItems } = useMemo(() => {
     if (!post) return { parsedHtml: '', tocItems: [] };
 
     const preparedMd = preprocessMarkdownLineBreaks(post.contentMarkdown);
-    let rawHtml = marked.parse(preparedMd, { async: false, gfm: true, breaks: true }) as string;
+    const mdWithVideos = transformVideoEmbeds(preparedMd);
+    let rawHtml = marked.parse(mdWithVideos, { async: false, gfm: true, breaks: true }) as string;
+    rawHtml = transformVideoEmbeds(rawHtml);
 
     // Inject loading="lazy" and decoding="async" into <img> tags
     rawHtml = rawHtml.replace(/<img\s+/gi, '<img loading="lazy" decoding="async" ');

@@ -285,11 +285,58 @@ function preprocessMarkdownLineBreaks(markdown: string): string {
     .join('');
 }
 
+function transformVideoEmbeds(content: string): string {
+  if (!content) return content;
+  let result = content;
+
+  // 1. YouTube
+  result = result.replace(/^(https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})[^\s<"']*)$/gim, (_m, _p1, ytId) => {
+    return `\n\n<div class="video-embed-wrapper video-youtube-wrapper my-8 w-full aspect-video rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-black"><iframe src="https://www.youtube-nocookie.com/embed/${ytId}?rel=0" class="w-full h-full border-0" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy"></iframe></div>\n\n`;
+  });
+
+  // 2. TikTok
+  result = result.replace(/^(https?:\/\/(?:www\.|m\.)?tiktok\.com\/(?:@[^/?#]+\/video\/|embed\/v2\/|v\/)(\d+)[^\s<"']*)$/gim, (_m, _p1, ttId) => {
+    return `\n\n<div class="video-embed-wrapper video-tiktok-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[360px] aspect-[9/16] min-h-[580px] max-h-[680px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-black"><iframe src="https://www.tiktok.com/embed/v2/${ttId}" class="w-full h-full border-0" title="TikTok video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe></div></div>\n\n`;
+  });
+
+  // 3. Instagram
+  result = result.replace(/^(https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:p|reel|tv)\/([a-zA-Z0-9_-]+)[^\s<"']*)$/gim, (_m, _p1, igId) => {
+    return `\n\n<div class="video-embed-wrapper video-instagram-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[460px] min-h-[520px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"><iframe src="https://www.instagram.com/p/${igId}/embed/" class="w-full h-[540px] sm:h-[580px] border-0" title="Instagram post or reel" frameborder="0" scrolling="no" allowtransparency="true" loading="lazy"></iframe></div></div>\n\n`;
+  });
+
+  // Paragraph wrappers
+  result = result.replace(/<p>\s*(?:<a[^>]+href="([^"]+)"[^>]*>[^<]+<\/a>|(https?:\/\/[^\s<]+))\s*<\/p>/gi, (match, href1, href2) => {
+    const targetUrl = href1 || href2;
+    if (!targetUrl) return match;
+
+    const ytMatch = targetUrl.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
+    if (ytMatch && ytMatch[1]) {
+      return `<div class="video-embed-wrapper video-youtube-wrapper my-8 w-full aspect-video rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-black"><iframe src="https://www.youtube-nocookie.com/embed/${ytMatch[1]}?rel=0" class="w-full h-full border-0" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy"></iframe></div>`;
+    }
+
+    const ttMatch = targetUrl.match(/tiktok\.com\/(?:@[^/?#]+\/video\/|embed\/v2\/|v\/)(\d+)/i);
+    if (ttMatch && ttMatch[1]) {
+      return `<div class="video-embed-wrapper video-tiktok-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[360px] aspect-[9/16] min-h-[580px] max-h-[680px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-black"><iframe src="https://www.tiktok.com/embed/v2/${ttMatch[1]}" class="w-full h-full border-0" title="TikTok video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe></div></div>`;
+    }
+
+    const igMatch = targetUrl.match(/(?:instagram\.com|instagr\.am)\/(?:p|reel|tv)\/([a-zA-Z0-9_-]+)/i);
+    if (igMatch && igMatch[1]) {
+      return `<div class="video-embed-wrapper video-instagram-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[460px] min-h-[520px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"><iframe src="https://www.instagram.com/p/${igMatch[1]}/embed/" class="w-full h-[540px] sm:h-[580px] border-0" title="Instagram post or reel" frameborder="0" scrolling="no" allowtransparency="true" loading="lazy"></iframe></div></div>`;
+    }
+
+    return match;
+  });
+
+  return result;
+}
+
 function renderMarkdownToHtml(markdown: string): string {
   if (!markdown) return '';
   try {
     const preparedMd = preprocessMarkdownLineBreaks(markdown);
-    return marked.parse(preparedMd, { async: false, gfm: true, breaks: true }) as string;
+    const mdWithVideos = transformVideoEmbeds(preparedMd);
+    const rawHtml = marked.parse(mdWithVideos, { async: false, gfm: true, breaks: true }) as string;
+    return transformVideoEmbeds(rawHtml);
   } catch (e) {
     // Simple regex fallback parser
     let html = markdown;
@@ -322,7 +369,7 @@ function applyAutoLinks(htmlContent: string, autolinks: AutoLink[]): string {
       if (htmlTag) return htmlTag;
       if (keywordMatch && replacedCount < 2) {
         replacedCount++;
-        return `<a href="${link.targetUrl}" class="inline-flex items-center gap-0.5 text-rose-700 font-semibold underline decoration-rose-400 underline-offset-4 hover:bg-rose-50 px-1 py-0.5 rounded transition-all" title="Artikel terkait: ${escapeHtml(link.description || link.keyword)}">${keywordMatch}↗</a>`;
+        return `<a href="${link.targetUrl}" class="inline-flex items-center gap-0.5 text-rose-700 font-semibold underline decoration-rose-400 underline-offset-4 hover:bg-rose-50 px-1 py-0.5 rounded transition-colors" title="Artikel terkait: ${escapeHtml(link.description || link.keyword)}">${keywordMatch}↗</a>`;
       }
       return match;
     });
@@ -360,6 +407,19 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
       if (results && results.length > 0) {
         const r: any = results[0];
+
+        // Auto-increment read counter in D1 (guarded against search bots)
+        const userAgent = request.headers.get('user-agent') || '';
+        const isBot = /bot|googlebot|crawler|spider|robot|crawling/i.test(userAgent);
+        if (!isBot && env.DB) {
+          try {
+            await env.DB.prepare('UPDATE posts SET views = COALESCE(views, 0) + 1 WHERE id = ?').bind(r.id).run();
+            r.views = (r.views || 0) + 1;
+          } catch (e) {
+            console.error('Error auto-incrementing views in SSR:', e);
+          }
+        }
+
         post = {
           id: r.id,
           title: r.title,
@@ -654,6 +714,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     <meta name="keywords" content="${escapeHtml(post.tags || 'parenting, anak, gizi')}" />
     <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
     <link rel="dns-prefetch" href="https://images.unsplash.com" />
+    <link rel="preconnect" href="https://res.cloudinary.com" crossorigin />
+    <link rel="dns-prefetch" href="https://res.cloudinary.com" />
     <link rel="canonical" href="${canonicalUrl}" />
     <link rel="preload" as="image" href="${heroImageSrc}" ${heroSrcSet ? `imagesrcset="${heroSrcSet}" imagesizes="(max-width: 1024px) 100vw, 700px"` : ''} fetchpriority="high" />
 

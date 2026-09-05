@@ -1,5 +1,6 @@
 interface Env {
   DB?: any;
+  GEMINI_API_KEY?: string;
   GITHUB_TOKEN?: string;
   GITHUB_OWNER?: string;
   GITHUB_REPO?: string;
@@ -240,22 +241,32 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         }
 
         const articleLinks = postsList
-          .map((p: any) => `* [${p.title}](${siteUrl}/baca/${p.slug}): ${p.excerpt || ''}`)
+          .map((p: any) => {
+            const safeTitle = String(p.title || 'Artikel').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').replace(/[\[\]]/g, '').trim();
+            const safeUrl = `${siteUrl}/baca/${encodeURIComponent(p.slug || '')}`;
+            const safeDesc = String(p.excerpt || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+            return safeDesc
+              ? `- [${safeTitle}](${safeUrl}): ${safeDesc}`
+              : `- [${safeTitle}](${safeUrl})`;
+          })
           .join('\n');
+
+        const fallbackItem = `- [Panduan Parenting Terlengkap](${siteUrl}/): Portal edukasi pola asuh anak, kesehatan balita, dan nutrisi keluarga di Indonesia.`;
+        const itemsContent = articleLinks.trim() || fallbackItem;
 
         const llmsTxt = `# Parenting.my.id
 
 > Portal berita dan informasi parenting terpercaya di Indonesia. Menyajikan edukasi pola asuh anak, kesehatan, serta nutrisi keluarga.
 
-## Artikel Terkait & Panduan Utama
+## Artikel Terbit & Panduan Utama
 
-${articleLinks}
+${itemsContent}
 
-## Sumber Daya Tambahan
+## Optional
 
-* [Konten Lengkap LLMs](${siteUrl}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
-* [Sitemap XML](${siteUrl}/sitemap.xml): Peta situs terstruktur untuk crawler.
-* [RSS Feed](${siteUrl}/feed.xml): Umpan sindikasi artikel terbaru.
+- [Konten Lengkap LLMs](${siteUrl}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
+- [Sitemap XML](${siteUrl}/sitemap.xml): Peta situs terstruktur untuk crawler.
+- [RSS Feed](${siteUrl}/feed.xml): Umpan sindikasi artikel terbaru.
 `.trim();
 
         return new Response(llmsTxt, {
@@ -523,6 +534,88 @@ Sitemap: ${siteUrl}/sitemap.xml
       }
 
       return jsonResponse({ success: true, message: 'Penulis / User berhasil dihapus.' });
+    }
+
+    // 1a. POST /api/posts/:id/view or /api/posts/:slug/view (Auto-increment Read Counter)
+    if (path.startsWith('/api/posts/') && path.endsWith('/view') && (method === 'POST' || method === 'GET')) {
+      const parts = path.split('/');
+      const idOrSlug = parts[3];
+      if (!idOrSlug) {
+        return jsonResponse({ error: 'Post identifier required' }, 400);
+      }
+
+      const numId = Number(idOrSlug);
+      let updatedViews = 1;
+
+      if (env.DB) {
+        try {
+          if (!isNaN(numId) && numId > 0) {
+            await env.DB.prepare('UPDATE posts SET views = COALESCE(views, 0) + 1 WHERE id = ?').bind(numId).run();
+            const { results } = await env.DB.prepare('SELECT views FROM posts WHERE id = ?').bind(numId).all();
+            if (results && results.length > 0) {
+              updatedViews = (results[0] as any).views;
+            }
+          } else {
+            await env.DB.prepare('UPDATE posts SET views = COALESCE(views, 0) + 1 WHERE slug = ?').bind(idOrSlug).run();
+            const { results } = await env.DB.prepare('SELECT views FROM posts WHERE slug = ?').bind(idOrSlug).all();
+            if (results && results.length > 0) {
+              updatedViews = (results[0] as any).views;
+            }
+          }
+          return jsonResponse({ success: true, views: updatedViews });
+        } catch (e: any) {
+          console.error('Error incrementing post views in D1:', e);
+        }
+      }
+      return jsonResponse({ success: true, views: updatedViews });
+    }
+
+    // 1b. GET /api/posts/:slug (Single post by slug or ID)
+    if (path.startsWith('/api/posts/') && !path.endsWith('/view') && method === 'GET') {
+      const slugOrId = path.replace('/api/posts/', '');
+      const numId = Number(slugOrId);
+      if (env.DB) {
+        try {
+          let postRow = null;
+          if (!isNaN(numId) && numId > 0) {
+            const { results } = await env.DB.prepare(`
+              SELECT 
+                p.id, p.title, p.slug, p.content_markdown as contentMarkdown, p.excerpt, 
+                p.featured_image as featuredImage, p.category, p.read_time_minutes as readTimeMinutes, 
+                p.author_id as authorId, p.co_author_ids as coAuthorIds, p.status, p.rejection_reason as rejectionReason, 
+                p.meta_title as metaTitle, p.meta_description as metaDescription, p.tags, p.views, 
+                p.created_at as createdAt, p.updated_at as updatedAt,
+                u.name as authorName, u.avatar as authorAvatar, u.role as authorRole
+              FROM posts p
+              LEFT JOIN users u ON p.author_id = u.id
+              WHERE p.id = ?
+              LIMIT 1
+            `).bind(numId).all();
+            if (results && results.length > 0) postRow = results[0];
+          } else {
+            const { results } = await env.DB.prepare(`
+              SELECT 
+                p.id, p.title, p.slug, p.content_markdown as contentMarkdown, p.excerpt, 
+                p.featured_image as featuredImage, p.category, p.read_time_minutes as readTimeMinutes, 
+                p.author_id as authorId, p.co_author_ids as coAuthorIds, p.status, p.rejection_reason as rejectionReason, 
+                p.meta_title as metaTitle, p.meta_description as metaDescription, p.tags, p.views, 
+                p.created_at as createdAt, p.updated_at as updatedAt,
+                u.name as authorName, u.avatar as authorAvatar, u.role as authorRole
+              FROM posts p
+              LEFT JOIN users u ON p.author_id = u.id
+              WHERE p.slug = ?
+              LIMIT 1
+            `).bind(slugOrId).all();
+            if (results && results.length > 0) postRow = results[0];
+          }
+          if (postRow) {
+            return jsonResponse(postRow);
+          }
+        } catch (e) {
+          console.error('Error fetching single post from D1:', e);
+        }
+      }
+      return jsonResponse({ error: 'Post not found' }, 404);
     }
 
     // 1. GET /api/posts
@@ -1562,6 +1655,61 @@ Sitemap: ${siteUrl}/sitemap.xml
       }
     }
 
+    // 13. POST /api/ai/generate-meta (Gemini AI SEO Assistant for Cloudflare Pages)
+    if (path === '/api/ai/generate-meta' && method === 'POST') {
+      await authenticateRequest(['admin', 'editor', 'writer']);
+      const { title, content } = await request.json() as any;
+      const apiKey = env.GEMINI_API_KEY;
+
+      const fallbackData = {
+        metaTitle: `${title || 'Artikel'} | Parenting.my.id`,
+        metaDescription: String(content || '').slice(0, 150).replace(/[#*`_]/g, '') + '...',
+        tags: 'parenting, anak, keluarga, kesehatan anak, balita',
+        excerpt: String(content || '').slice(0, 180).replace(/[#*`_]/g, '') + '...',
+        aiGenerated: false,
+      };
+
+      if (!apiKey) {
+        return jsonResponse(fallbackData);
+      }
+
+      try {
+        const prompt = `Anda adalah seorang Senior SEO Specialist & Parenting Content Strategist untuk website parenting.my.id.
+Berdasarkan judul artikel: "${title}" dan isi: "${String(content || '').slice(0, 600)}", hasilkan format JSON persis seperti ini tanpa markdown codeblock:
+{
+  "metaTitle": "${title} | Parenting.my.id",
+  "metaDescription": "Deskripsi Meta SEO membujuk yang memuat kata kunci utama tentang parenting (120-155 karakter).",
+  "tags": "5 kata kunci relevan dipisahkan koma",
+  "excerpt": "Ringkasan artikel 2 kalimat yang hangat dan empatik untuk orang tua Indonesia."
+}`;
+
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+            }),
+          }
+        );
+
+        if (geminiRes.ok) {
+          const geminiData: any = await geminiRes.json();
+          const responseText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            return jsonResponse({ ...parsed, aiGenerated: true });
+          }
+        }
+      } catch (err: any) {
+        console.error('Gemini error in Cloudflare Pages:', err);
+      }
+
+      return jsonResponse(fallbackData);
+    }
+
     return jsonResponse({ error: 'Endpoint tidak ditemukan' }, 404);
   } catch (err: any) {
     return jsonResponse({ error: err.message || 'Internal Server Error' }, 500);
@@ -1620,22 +1768,32 @@ async function syncStaticFilesToGitHub(env: Env, waitUntil?: (promise: Promise<a
 
       // 3. generate llms.txt
       const articleLinks = postsList
-        .map((p: any) => `* [${p.title}](${siteUrl}/baca/${p.slug}): ${p.excerpt || ''}`)
+        .map((p: any) => {
+          const safeTitle = String(p.title || 'Artikel').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').replace(/[\[\]]/g, '').trim();
+          const safeUrl = `${siteUrl}/baca/${encodeURIComponent(p.slug || '')}`;
+          const safeDesc = String(p.excerpt || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+          return safeDesc
+            ? `- [${safeTitle}](${safeUrl}): ${safeDesc}`
+            : `- [${safeTitle}](${safeUrl})`;
+        })
         .join('\n');
+
+      const fallbackItem = `- [Panduan Parenting Terlengkap](${siteUrl}/): Portal edukasi pola asuh anak, kesehatan balita, dan nutrisi keluarga di Indonesia.`;
+      const itemsContent = articleLinks.trim() || fallbackItem;
 
       const llmsTxt = `# Parenting.my.id
 
 > Portal berita dan informasi parenting terpercaya di Indonesia. Menyajikan edukasi pola asuh anak, kesehatan, serta nutrisi keluarga.
 
-## Artikel Terkait & Panduan Utama
+## Artikel Terbit & Panduan Utama
 
-${articleLinks || '* [Panduan Parenting Utama](' + siteUrl + '): Edukasi pola asuh anak dan kesehatan.'}
+${itemsContent}
 
-## Sumber Daya Tambahan
+## Optional
 
-* [Konten Lengkap LLMs](${siteUrl}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
-* [Sitemap XML](${siteUrl}/sitemap.xml): Peta situs terstruktur untuk crawler.
-* [RSS Feed](${siteUrl}/feed.xml): Umpan sindikasi artikel terbaru.
+- [Konten Lengkap LLMs](${siteUrl}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
+- [Sitemap XML](${siteUrl}/sitemap.xml): Peta situs terstruktur untuk crawler.
+- [RSS Feed](${siteUrl}/feed.xml): Umpan sindikasi artikel terbaru.
 `.trim();
 
       // 4. generate llms-full.txt

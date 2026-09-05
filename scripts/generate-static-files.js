@@ -84,7 +84,7 @@ export function generateFeedXml(posts) {
   const items = publishedPosts
     .map((p) => {
       const pubDate = p.createdAt ? new Date(p.createdAt).toUTCString() : (p.updatedAt ? new Date(p.updatedAt).toUTCString() : new Date().toUTCString());
-      const link = `${SITE_URL}/baca/${encodeURIComponent(p.slug)}`;
+      const link = escapeXml(`${SITE_URL}/baca/${encodeURIComponent(p.slug)}`);
       const titleClean = escapeCdata(p.title || '');
       const descClean = escapeCdata(p.excerpt || '');
       return `    <item>
@@ -92,7 +92,7 @@ export function generateFeedXml(posts) {
       <link>${link}</link>
       <guid>${link}</guid>
       <description><![CDATA[${descClean}]]></description>
-      <pubDate>${pubDate}</pubDate>
+      <pubDate>${escapeXml(pubDate)}</pubDate>
     </item>`;
     })
     .join('\n');
@@ -101,7 +101,7 @@ export function generateFeedXml(posts) {
 <rss version="2.0">
   <channel>
     <title>Parenting.my.id - Edukasi &amp; Pola Asuh Anak Modern</title>
-    <link>${SITE_URL}</link>
+    <link>${escapeXml(SITE_URL)}</link>
     <description>Portal artikel parenting, gizi anak, stimulasi balita, dan pencegahan stunting di Indonesia.</description>
     <language>id-id</language>
 ${items}
@@ -156,28 +156,44 @@ export function generateLlmsTxt(posts, feedXmlContent) {
     const publishedPosts = (posts || []).filter((p) => p.status === 'published');
     items = publishedPosts.map((p) => ({
       title: p.title,
-      link: `${SITE_URL}/baca/${p.slug}`,
+      link: `${SITE_URL}/baca/${encodeURIComponent(p.slug || '')}`,
       description: p.excerpt || '',
     }));
   }
 
   const articleLinks = items
-    .map((item) => `* [${item.title}](${item.link}): ${item.description}`)
+    .map((item) => {
+      const safeTitle = String(item.title || 'Artikel')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/[\[\]]/g, '')
+        .trim();
+      const safeDesc = String(item.description || '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return safeDesc
+        ? `- [${safeTitle}](${item.link}): ${safeDesc}`
+        : `- [${safeTitle}](${item.link})`;
+    })
     .join('\n');
+
+  const fallbackItem = `- [Panduan Parenting Terlengkap](${SITE_URL}/): Portal edukasi pola asuh anak, kesehatan balita, dan nutrisi keluarga di Indonesia.`;
+  const itemsContent = articleLinks.trim() || fallbackItem;
 
   return `# Parenting.my.id
 
 > Portal berita dan informasi parenting terpercaya di Indonesia. Menyajikan edukasi pola asuh anak, kesehatan, serta nutrisi keluarga.
 
-## Artikel Terkait & Panduan Utama
+## Artikel Terbit & Panduan Utama
 
-${articleLinks}
+${itemsContent}
 
-## Sumber Daya Tambahan
+## Optional
 
-* [Konten Lengkap LLMs](${SITE_URL}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
-* [Sitemap XML](${SITE_URL}/sitemap.xml): Peta situs terstruktur untuk crawler.
-* [RSS Feed](${SITE_URL}/feed.xml): Umpan sindikasi artikel terbaru.
+- [Konten Lengkap LLMs](${SITE_URL}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
+- [Sitemap XML](${SITE_URL}/sitemap.xml): Peta situs terstruktur untuk crawler.
+- [RSS Feed](${SITE_URL}/feed.xml): Umpan sindikasi artikel terbaru.
 `.trim();
 }
 
@@ -229,7 +245,7 @@ export function generateSitemapXml(posts) {
     })
     .join('');
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${SITE_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>${urls}</urlset>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${escapeXml(SITE_URL)}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>${urls}</urlset>`;
 
   return xml.trim();
 }

@@ -21,6 +21,19 @@ const INITIAL_POSTS = [
   },
 ];
 
+function sanitizeLlmsText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeLlmsTitle(title: string): string {
+  if (!title) return 'Artikel';
+  return sanitizeLlmsText(title).replace(/[\[\]]/g, '');
+}
+
 export const onRequest: PagesFunction<Env> = async (context) => {
   const { env } = context;
   const siteUrl = (env.SITE_URL || 'https://parenting.my.id').replace(/\/$/, '');
@@ -44,9 +57,19 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
   }
 
-  const articlesList = posts
-    .map((p) => `* [${p.title}](${siteUrl}/baca/${p.slug})${p.excerpt ? `: ${p.excerpt}` : ''}`)
+  const articlesList = (posts || [])
+    .map((p) => {
+      const safeTitle = sanitizeLlmsTitle(p.title);
+      const safeUrl = `${siteUrl}/baca/${encodeURIComponent(p.slug || '')}`;
+      const safeExcerpt = sanitizeLlmsText(p.excerpt);
+      return safeExcerpt
+        ? `- [${safeTitle}](${safeUrl}): ${safeExcerpt}`
+        : `- [${safeTitle}](${safeUrl})`;
+    })
     .join('\n');
+
+  const fallbackItem = `- [Panduan Parenting Terlengkap](${siteUrl}/): Portal edukasi pola asuh anak, kesehatan balita, dan nutrisi keluarga di Indonesia.`;
+  const itemsContent = articlesList.trim() || fallbackItem;
 
   const content = `# Parenting.my.id
 
@@ -54,8 +77,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
 ## Artikel Terbit & Panduan Utama
 
-${articlesList}
-`;
+${itemsContent}
+
+## Optional
+
+- [Konten Lengkap LLMs](${siteUrl}/llms-full.txt): Kumpulan teks lengkap artikel untuk konsumsi dan inferensi model bahasa (LLM).
+- [Sitemap XML](${siteUrl}/sitemap.xml): Peta situs terstruktur untuk crawler.
+- [RSS Feed](${siteUrl}/feed.xml): Umpan sindikasi artikel terbaru.
+`.trim();
 
   return new Response(content, {
     headers: {

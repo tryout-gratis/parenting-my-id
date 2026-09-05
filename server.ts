@@ -623,10 +623,11 @@ app.get('/api/posts/:slug', (req, res) => {
   res.json(post);
 });
 
-// POST Increment Post View Count (Human reader scrolled past midpoint)
-app.post('/api/posts/:id/view', (req, res) => {
-  const postId = Number(req.params.id);
-  const post = mockPosts.find((p) => p.id === postId);
+// POST/GET Increment Post View Count (Auto-increment on article read)
+app.all(['/api/posts/:id/view', '/api/posts/:slug/view'], (req, res) => {
+  const idOrSlug = req.params.id || req.params.slug;
+  const numId = Number(idOrSlug);
+  const post = mockPosts.find((p) => (!isNaN(numId) && p.id === numId) || p.slug === idOrSlug);
   if (!post) {
     return res.status(404).json({ error: 'Post not found' });
   }
@@ -1326,17 +1327,30 @@ app.get('/baca/:slug', (req, res, next) => {
     // Convert Markdown to sanitized HTML using marked
     let rawHtml = '';
     try {
-      rawHtml = marked.parse(post.contentMarkdown || '', { gfm: true, breaks: true }) as string;
+      let content = post.contentMarkdown || '';
+      // Transform video embeds
+      content = content.replace(/^(https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})[^\s<"']*)$/gim, (_m, _p1, ytId) => {
+        return `\n\n<div class="video-embed-wrapper video-youtube-wrapper my-8 w-full aspect-video rounded-2xl overflow-hidden shadow-lg border border-slate-200 bg-black"><iframe src="https://www.youtube-nocookie.com/embed/${ytId}?rel=0" class="w-full h-full border-0" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy"></iframe></div>\n\n`;
+      });
+      content = content.replace(/^(https?:\/\/(?:www\.|m\.)?tiktok\.com\/(?:@[^/?#]+\/video\/|embed\/v2\/|v\/)(\d+)[^\s<"']*)$/gim, (_m, _p1, ttId) => {
+        return `\n\n<div class="video-embed-wrapper video-tiktok-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[360px] aspect-[9/16] min-h-[580px] max-h-[680px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 bg-black"><iframe src="https://www.tiktok.com/embed/v2/${ttId}" class="w-full h-full border-0" title="TikTok video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe></div></div>\n\n`;
+      });
+      content = content.replace(/^(https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:p|reel|tv)\/([a-zA-Z0-9_-]+)[^\s<"']*)$/gim, (_m, _p1, igId) => {
+        return `\n\n<div class="video-embed-wrapper video-instagram-wrapper my-8 flex justify-center w-full"><div class="w-full max-w-[460px] min-h-[520px] rounded-2xl overflow-hidden shadow-lg border border-slate-200 bg-white"><iframe src="https://www.instagram.com/p/${igId}/embed/" class="w-full h-[540px] sm:h-[580px] border-0" title="Instagram post or reel" frameborder="0" scrolling="no" allowtransparency="true" loading="lazy"></iframe></div></div>\n\n`;
+      });
+
+      rawHtml = marked.parse(content, { gfm: true, breaks: true }) as string;
     } catch (mErr) {
       rawHtml = post.contentMarkdown || '';
     }
 
     const bodyHtml = sanitizeHtml(rawHtml, {
-      allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'h4', 'span', 'figure', 'figcaption', 'strong', 'em', 'blockquote']),
+      allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'h4', 'span', 'figure', 'figcaption', 'strong', 'em', 'blockquote', 'iframe']),
       allowedAttributes: {
         ...sanitizeHtml.defaults.allowedAttributes,
         img: ['src', 'alt', 'title', 'width', 'height', 'loading', 'class'],
         a: ['href', 'name', 'target', 'rel', 'class'],
+        iframe: ['src', 'width', 'height', 'frameborder', 'allow', 'allowfullscreen', 'title', 'loading', 'scrolling', 'allowtransparency', 'class'],
         span: ['class'],
         div: ['class'],
         blockquote: ['class'],
@@ -1346,6 +1360,7 @@ app.get('/baca/:slug', (req, res, next) => {
         h4: ['class'],
         p: ['class'],
       },
+      allowedIframeHostnames: ['www.youtube.com', 'www.youtube-nocookie.com', 'youtube.com', 'www.tiktok.com', 'tiktok.com', 'www.instagram.com', 'instagram.com'],
     });
 
     const preRenderedBody = `
